@@ -181,6 +181,88 @@ test('project repository returns null for no lookup match and surfaces lookup er
   });
 });
 
+test('project repository calls the search RPC with the query vector and minimal columns', async () => {
+  const calls = [];
+  const expectedRows = [{ id: 7, status: 'frei', titel: 'Puzzle Trainer' }];
+  const embedding = Array.from({ length: 1_024 }, (_, index) => index / 1_024);
+  const repository = createProjectRepository(
+    {
+      supabaseUrl: 'https://example.supabase.co',
+      supabaseServiceKey: 'service-role-key',
+    },
+    {
+      createClient() {
+        return {
+          rpc(name, params) {
+            calls.push(['rpc', name, params]);
+            return {
+              async select(columns) {
+                calls.push(['select', columns]);
+                return { data: expectedRows, error: null };
+              },
+            };
+          },
+        };
+      },
+    },
+  );
+
+  const rows = await repository.searchProjekte({
+    embedding,
+    queryText: 'puzzle game',
+    treffer: 5,
+  });
+
+  assert.strictEqual(rows, expectedRows);
+  assert.deepEqual(calls, [
+    ['rpc', 'suche_projekte', {
+      query_embedding: embedding,
+      query_text: 'puzzle game',
+      treffer: 5,
+    }],
+    ['select', 'id,status,titel'],
+  ]);
+});
+
+test('project repository normalizes empty search results and surfaces RPC errors', async (t) => {
+  function makeRepository(result) {
+    return createProjectRepository(
+      {
+        supabaseUrl: 'https://example.supabase.co',
+        supabaseServiceKey: 'service-role-key',
+      },
+      {
+        createClient() {
+          return {
+            rpc() {
+              return {
+                async select() {
+                  return result;
+                },
+              };
+            },
+          };
+        },
+      },
+    );
+  }
+
+  await t.test('missing data becomes an empty list', async () => {
+    assert.deepEqual(
+      await makeRepository({ data: null, error: null }).searchProjekte({}),
+      [],
+    );
+  });
+
+  await t.test('surfaces errors', async () => {
+    const databaseError = new Error('rpc unavailable');
+    await assert.rejects(
+      makeRepository({ data: null, error: databaseError }).searchProjekte({}),
+      databaseError,
+    );
+  });
+});
+
 test('schema locks project data and RPC access to the service role', async () => {
   const schema = await readFile(new URL('../sql/schema.sql', import.meta.url), 'utf-8');
 

@@ -1,7 +1,7 @@
 # SETUP.md — WhatsApp Projekt-Datenbank (Ingest-Bot + semantische Suche)
 
-> **Projektstatus:** Phase 1 bis 3 sind lokal implementiert. Die aktuelle
-> automatisierte Suite besteht mit 80/80 Tests. Die Live-Abnahme mit Anthropic,
+> **Projektstatus:** Phase 1 bis 4 sind lokal implementiert. Die aktuelle
+> automatisierte Suite besteht mit 124/124 Tests. Die Live-Abnahme mit Anthropic,
 > Voyage, WhatsApp und Supabase sowie das Anwenden des Schemas auf ein
 > Remote-Projekt stehen ohne Zugangsdaten noch aus.
 
@@ -80,7 +80,9 @@ Remote-Schritt ist in der lokalen Phase-3-Validierung noch nicht erfolgt.
   rohen Markdown an Anthropic. Für `claude-fable-5` gilt laut
   [Anthropic-Dokumentation](https://platform.claude.com/docs/en/manage-claude/api-and-data-retention)
   eine 30-tägige Aufbewahrung.
-- An Voyage gehen Titel und Zusammenfassung, nicht das vollständige Markdown.
+- An Voyage gehen beim Ingest Titel und Zusammenfassung, nicht das vollständige
+  Markdown. Bei `/suche` geht der eingegebene Suchtext an Voyage; er ist auf 500
+  Zeichen begrenzt.
 - Projektdateien dürfen keine Secrets, Zugangsdaten oder unnötigen sensiblen
   beziehungsweise personenbezogenen Daten enthalten. Vor Livebetrieb die
   Community über die externe Verarbeitung informieren und die eigenen
@@ -96,13 +98,15 @@ wa-projekt-bot/
 │  ├─ index.js          # Konfiguration, Clients, Baileys-Verbindung und Routing
 │  ├─ config.js         # Pflichtvariablen und HTTPS-Prüfung
 │  ├─ ingest.js         # Filter, Download, Replay, Anreicherung und Bestätigung
-│  ├─ db.js             # Supabase-Lookup und idempotenter Upsert
+│  ├─ commands.js       # Command-Parsing, /suche und Ergebnisformatierung
+│  ├─ db.js             # Supabase-Lookup, idempotenter Upsert und Such-RPC
 │  ├─ llm.js            # Anthropic Structured Outputs und Metadatenvalidierung
 │  └─ embed.js          # Voyage-Embeddings für document/query
 ├─ test/
 │  ├─ config.test.js
 │  ├─ db.test.js
 │  ├─ ingest.test.js
+│  ├─ commands.test.js
 │  ├─ llm.test.js
 │  └─ embed.test.js
 ├─ auth/                # Baileys useMultiFileAuthState, nicht committen
@@ -112,7 +116,8 @@ wa-projekt-bot/
 └─ package.json
 ```
 
-`commands.js` folgt mit den WhatsApp-Befehlen in den Phasen 4 und 5.
+`commands.js` enthält seit Phase 4 die WhatsApp-Befehle; Phase 5 ergänzt dort
+`/nehmen` und `/liste`.
 
 ---
 
@@ -218,8 +223,8 @@ Phase 2 führte den sicheren Rohdaten-Ingest ein:
   Unique-Constraint verhindert eine zweite Zeile bei Replay.
 - Eine WhatsApp-Bestätigung folgt erst auf die erfolgreiche Persistenz.
 
-Die damalige Phase-2-Suite bestand mit 23/23 Tests. Die aktuelle
-Phase-3-Suite enthält diese Regressionen und besteht mit 80/80 Tests.
+Die damalige Phase-2-Suite bestand mit 23/23 Tests. Die aktuelle Suite enthält
+diese Regressionen unverändert.
 
 ---
 
@@ -248,9 +253,9 @@ Phase 3 ergänzt zwei fest konfigurierte Provider-Schichten.
   Zahlen für das erwartete Modell.
 - Timeout sowie höchstens drei Versuche; Retries nur für HTTP 429 und 5xx.
 
-Phase 4 muss Suchanfragen mit demselben `voyage-4`, derselben Dimension und
-`input_type: query` einbetten. Unterschiedliche Modelle oder Dimensionen dürfen
-nicht im selben Vektorraum gemischt werden.
+Phase 4 bettet Suchanfragen mit demselben `voyage-4`, derselben Dimension und
+`input_type: query` ein. Unterschiedliche Modelle oder Dimensionen dürfen nicht
+im selben Vektorraum gemischt werden.
 
 **Ablauf für neue Dokumente**
 
@@ -279,10 +284,11 @@ Phase-3-Zeile geschrieben und keine Bestätigung gesendet.
 
 **Lokale Verifikation**
 
-`npm test` besteht mit 80/80 netzfreien Tests. Abgedeckt sind der genaue
-Anthropic-/Voyage-Vertrag, Schema- und Dimensionsvalidierung, Timeout/Retry,
-Refusal- und Fehlerpfade, vollständige neue Ingestion, kostenfreie Replays,
-stille Phase-2-Anreicherung, DB-Allowlist und fehlende Teilpersistenz.
+Phase 3 brachte die Suite auf 80/80 netzfreie Tests; sie sind in den aktuellen
+124/124 enthalten. Abgedeckt sind der genaue Anthropic-/Voyage-Vertrag, Schema-
+und Dimensionsvalidierung, Timeout/Retry, Refusal- und Fehlerpfade, vollständige
+neue Ingestion, kostenfreie Replays, stille Phase-2-Anreicherung, DB-Allowlist
+und fehlende Teilpersistenz.
 
 **Noch offene Live-Abnahme**
 
@@ -304,28 +310,58 @@ live aufgerufen. Diese Abnahme ist vor einem produktiven Einsatz zwingend.
 
 ---
 
-### Phase 4 — `/suche` (geplant)
+### Phase 4 — `/suche` (lokal implementiert)
 
-Command-Routing in `messages.upsert`: Textnachrichten, die mit `/` beginnen,
-gehen an `commands.js` statt in den Ingest.
+**Routing**
 
-- `/suche <text>` → `embed(text, { inputType: 'query' })` mit `voyage-4` →
-  RPC `suche_projekte` → Top 5 formatiert zurück.
+`messages.upsert` filtert weiterhin zuerst auf eigene Nachrichten und die exakte
+Zielgruppe. Danach entscheidet `commands.js`: Textnachrichten, deren getrimmter
+Inhalt mit `/` beginnt, werden als Befehl behandelt und erreichen den Ingest
+nicht. Alles andere läuft unverändert durch den Phase-3-Pfad. Der Befehlsname
+wird kleingeschrieben und muss `[a-z0-9_-]` mit höchstens 32 Zeichen entsprechen;
+sonst gilt die Nachricht nicht als Befehl. Ein `/suche` in der Bildunterschrift
+eines Dokuments ist kein Befehl, sondern bleibt ein Ingest-Kandidat.
 
-```js
-export async function handleSuche(sock, jid, query) {
-  const emb = await embed(query, { inputType: 'query' });
-  const { data, error } = await supabase.rpc('suche_projekte', {
-    query_embedding: emb,
-    query_text: query,
-    treffer: 5,
-  });
-  if (error) throw error;
-  const lines = data.map(p => `#${p.id} [${p.status}] ${p.titel}`).join('\n')
-    || 'Nichts gefunden.';
-  await sock.sendMessage(jid, { text: lines });
-}
-```
+**`src/commands.js` — `/suche <text>`**
+
+- Der Suchtext wird mit `embed(text, { inputType: 'query' })` eingebettet, also
+  mit `voyage-4` und denselben 1024 Float-Dimensionen wie der Ingest.
+- Danach folgt der RPC `suche_projekte` mit `query_embedding`, `query_text` und
+  `treffer: 5`.
+- Der RPC liefert `setof projekte`. Die Abfrage projiziert serverseitig auf
+  `id,status,titel`, damit weder `raw_md` noch fünf Embeddings übertragen werden.
+- Die Antwort enthält höchstens fünf Zeilen im Format
+  `#<id> [<status>] <titel>`, ohne Treffer „Nichts gefunden.“.
+- Zeilen ohne positive Ganzzahl-`id` oder ohne Titel werden verworfen; `titel`
+  und `status` werden vor dem Senden bereinigt und auf 160 beziehungsweise 32
+  Zeichen begrenzt.
+
+**Grenzen und Fehlerverhalten**
+
+- Ein leerer Suchbegriff beantwortet der Bot mit `Nutzung: /suche <suchbegriff>`,
+  mehr als 500 Zeichen mit einer Längenmeldung. Beides geschieht vor dem
+  kostenpflichtigen Voyage-Aufruf.
+- Unbekannte Befehle werden verworfen: keine Antwort, kein Provider-Aufruf, kein
+  Ingest.
+- Schlägt Voyage oder der RPC fehl, sendet der Bot nur „Die Suche ist gerade
+  nicht möglich.“ und der Fehler wird bereinigt und begrenzt protokolliert.
+  Provider- oder Datenbankdetails erreichen die Gruppe nicht.
+
+**Lokale Verifikation**
+
+`npm test` besteht mit 124/124 netzfreien Tests. Phase 4 deckt Parsing,
+Routing gegen den Ingest, den RPC-Vertrag, Ergebnisformatierung und
+-bereinigung, Eingabegrenzen sowie Provider- und Datenbankfehler ab.
+
+**Noch offene Live-Abnahme**
+
+1. `/suche puzzle game` in der Zielgruppe absetzen und prüfen, dass der Bot
+   thematisch passende Projekte nennt, auch wenn das Wort „puzzle“ im Post nicht
+   wörtlich vorkommt.
+2. Dabei verifizieren, dass supabase-js das Zahlenarray als `vector(1024)`
+   akzeptiert (siehe Fallstricke) und die Projektion `id,status,titel` greift.
+3. `/suche` ohne Begriff, mit über 500 Zeichen und einen unbekannten Befehl wie
+   `/liste` absetzen und das jeweils beschriebene Verhalten prüfen.
 
 **Akzeptanzkriterium:** `/suche puzzle game` liefert thematisch passende
 Projekte, auch wenn das Wort „puzzle“ im Post nicht wörtlich vorkommt.
@@ -388,8 +424,9 @@ zwischen Neustarts persistent bleiben.
   und Bestätigungen verursachen. Für höhere Last ist DB-Claiming oder ein
   keyed Lock erforderlich.
 - **Rate und Kosten:** Jedes Mitglied der Zielgruppe kann mit einer neuen `.md`
-  kostenpflichtige Aufrufe auslösen. Rate Limits, Quoten und Kosten überwachen;
-  für breiteren Betrieb eine Sender-Allowlist oder Rate-Limits ergänzen.
+  und mit jedem `/suche` kostenpflichtige Aufrufe auslösen. Rate Limits, Quoten
+  und Kosten überwachen; für breiteren Betrieb eine Sender-Allowlist oder
+  Rate-Limits ergänzen. Der Bot begrenzt Befehle bisher nicht pro Absender.
 - **Supabase-Zugang:** Nur HTTPS akzeptieren. Den `service_role`-Key nur im
   serverseitigen Bot verwenden; RLS und Rechte aus `sql/schema.sql` nicht
   lockern.
@@ -399,9 +436,13 @@ zwischen Neustarts persistent bleiben.
 - **Voyage-Raum:** Dokumente und Queries müssen beide `voyage-4` mit 1024
   Float-Dimensionen verwenden; nur `input_type` wechselt zwischen `document`
   und `query`.
-- **pgvector via supabase-js RPC:** Falls der Phase-4-RPC das Zahlenarray nicht
-  akzeptiert, die von Supabase erwartete Vektordarstellung gegen die reale
-  Instanz prüfen. Diese Live-Integration ist noch nicht validiert.
+- **pgvector via supabase-js RPC:** `/suche` übergibt `query_embedding` als
+  Zahlenarray. Falls die reale Instanz das nicht akzeptiert, die erwartete
+  Vektordarstellung dort prüfen. Diese Live-Integration ist noch nicht validiert.
+- **Befehle sind keine Ingest-Nachrichten:** Ein `/`-Präfix schaltet den Ingest
+  für diese Nachricht ab. Neue Befehle in `commands.js` müssen deshalb selbst
+  entscheiden, ob sie antworten, und dürfen keine Provider-Aufrufe auslösen,
+  bevor Eingabe und Länge geprüft sind.
 
 ---
 
@@ -413,5 +454,5 @@ anderes Mitglied findet das Projekt über `/suche`, `/nehmen` markiert es als
 vergeben und es verschwindet aus `/liste frei`. Alles bleibt innerhalb
 WhatsApp.
 
-Aktuell ist Phase 3 lokal abgeschlossen. Die produktive Freigabe bleibt bis zur
+Aktuell ist Phase 4 lokal abgeschlossen. Die produktive Freigabe bleibt bis zur
 oben beschriebenen Live-Abnahme offen.

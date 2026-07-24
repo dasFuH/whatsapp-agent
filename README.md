@@ -2,16 +2,17 @@
 
 Ein WhatsApp-Bot für die MB/AI-Stammtisch-Community: Er erfasst in einer fest
 konfigurierten Gruppe geteilte `.md`-Projektbeschreibungen in Supabase, extrahiert
-strukturierte Metadaten und erzeugt Vektor-Embeddings. Semantische Suche und
-Claim-Befehle direkt in WhatsApp folgen in den Phasen 4 und 5.
+strukturierte Metadaten und erzeugt Vektor-Embeddings. Mit `/suche <text>` sind
+die Projekte direkt in WhatsApp semantisch auffindbar. Claim-Befehle folgen in
+Phase 5.
 
 Die vollständige Spezifikation mit allen Phasen, Datenbankschema und
 Deployment-Hinweisen steht in [SETUP.md](./SETUP.md).
 
 ## Status
 
-✅ **Phase 3 von 5 ist lokal implementiert und automatisiert verifiziert**
-(`npm test`: 80/80 Tests).
+✅ **Phase 4 von 5 ist lokal implementiert und automatisiert verifiziert**
+(`npm test`: 124/124 Tests).
 
 Der Bot verarbeitet ausschließlich `.md`-Dokumente aus der exakten
 `TARGET_GROUP_JID`. Neue Dokumente dürfen höchstens 1 MiB groß sein und müssen
@@ -28,13 +29,22 @@ Phase-2-Zeilen werden still aus ihrem gespeicherten `raw_md` angereichert; dabei
 werden ausschließlich die erlaubten Phase-3-Felder geschrieben. Es gibt keine
 Teilpersistenz.
 
-Für Phase 3 war keine Datenbankmigration nötig: Das vorhandene Schema enthält
-bereits die Metadatenfelder und `embedding vector(1024)`.
+Textnachrichten, die mit `/` beginnen, gehen an das Command-Routing statt in den
+Ingest. `/suche <text>` bettet die Anfrage mit `voyage-4` und `input_type: query`
+ein, ruft den RPC `suche_projekte` auf und antwortet mit höchstens fünf Treffern
+im Format `#<id> [<status>] <titel>`. Ohne Treffer meldet der Bot
+„Nichts gefunden.“. Unbekannte Befehle werden ohne Antwort und ohne
+Provider-Aufruf verworfen.
+
+Für die Phasen 3 und 4 war keine Datenbankmigration nötig: Das vorhandene Schema
+enthält bereits die Metadatenfelder, `embedding vector(1024)` und die Funktion
+`suche_projekte`.
 
 Noch ausstehend ist die Live-Abnahme mit echten Anthropic-, Voyage-, WhatsApp-
 und Supabase-Zugängen. Das Anwenden von [sql/schema.sql](./sql/schema.sql), reale
-Provider-Antworten, Medien-Download, Remote-Persistenz und WhatsApp-Bestätigung
-wurden lokal nicht verifiziert.
+Provider-Antworten, Medien-Download, Remote-Persistenz, WhatsApp-Bestätigung und
+der RPC-Aufruf mit einem echten `vector(1024)`-Argument wurden lokal nicht
+verifiziert.
 
 ## Tech-Stack
 
@@ -46,9 +56,9 @@ wurden lokal nicht verifiziert.
 | Embeddings | Voyage `voyage-4`, 1024 Float-Dimensionen |
 | Runtime | Node.js ≥ 20 |
 
-`voyage-4` ist fest konfiguriert. Der Ingest verwendet `input_type: document`;
-Phase 4 muss für Suchanfragen dasselbe Modell und denselben 1024-dimensionalen
-Vektorraum mit `input_type: query` verwenden.
+`voyage-4` ist fest konfiguriert. Der Ingest verwendet `input_type: document`,
+`/suche` verwendet dasselbe Modell und denselben 1024-dimensionalen Vektorraum
+mit `input_type: query`.
 
 ## Quick Start
 
@@ -98,20 +108,33 @@ Beim ersten Start erscheint ein QR-Code in der Konsole. Nach dem Scan über
 „Verknüpfte Geräte“ bleibt die WhatsApp-Session in `auth/` gespeichert; bei
 einem normalen Verbindungsabbruch verbindet sich der Bot erneut.
 
+## Befehle
+
+| Befehl | Wirkung |
+|---|---|
+| `/suche <text>` | semantische Suche über alle nicht erledigten Projekte, höchstens fünf Treffer als `#<id> [<status>] <titel>` |
+
+Der Befehlsname ist case-insensitiv (`/Suche` funktioniert). Ohne Suchbegriff
+antwortet der Bot mit einem Nutzungshinweis, bei mehr als 500 Zeichen mit einer
+Längenmeldung; in beiden Fällen erfolgt kein Provider-Aufruf. `/nehmen` und
+`/liste` folgen in Phase 5 und werden bis dahin ohne Antwort verworfen.
+
 ## Datenverarbeitung und Betrieb
 
 - Pro neuem oder unvollständigem Projekt werden bis zu 12.000 Zeichen des rohen
   Markdown an Anthropic übertragen. Für `claude-fable-5` gilt laut
   [Anthropic-Dokumentation](https://platform.claude.com/docs/en/manage-claude/api-and-data-retention)
   eine 30-tägige Aufbewahrung.
-- An Voyage gehen nur der extrahierte Titel und die Zusammenfassung, nicht das
-  vollständige Markdown.
+- An Voyage gehen beim Ingest nur der extrahierte Titel und die Zusammenfassung,
+  nicht das vollständige Markdown. Bei `/suche` geht der eingegebene Suchtext an
+  Voyage; er ist auf 500 Zeichen begrenzt.
 - Keine Secrets, Zugangsdaten oder sensiblen/personenbezogenen Inhalte in
   Projektdateien ablegen. Vor Livebetrieb müssen die Community über die externe
   Verarbeitung informiert und die eigenen Datenschutzanforderungen geklärt
   werden.
 - Rate Limits, Provider-Quoten und Kosten überwachen. Jedes Gruppenmitglied kann
-  mit einer neuen `.md` kostenpflichtige Provider-Aufrufe auslösen.
+  mit einer neuen `.md` und mit jedem `/suche` kostenpflichtige Provider-Aufrufe
+  auslösen. Der Bot begrenzt Anfragen bisher nicht pro Absender.
 - Parallele Zustellungen derselben neuen Nachrichten-ID können wegen der
   nicht-atomaren Prüfung doppelte Providerkosten und Bestätigungen erzeugen.
   Der Unique-Key verhindert eine zweite Datenbankzeile, ersetzt aber kein
@@ -124,14 +147,16 @@ wa-projekt-bot/
 ├─ src/
 │  ├─ index.js          # Konfiguration, Clients, Baileys-Verbindung und Routing
 │  ├─ config.js         # Pflichtvariablen und HTTPS-Prüfung
-│  ├─ db.js             # Supabase-Lookup und idempotenter Upsert
+│  ├─ db.js             # Supabase-Lookup, idempotenter Upsert und Such-RPC
 │  ├─ ingest.js         # Filter, Download, Replay, Anreicherung und Bestätigung
+│  ├─ commands.js       # Command-Parsing und /suche
 │  ├─ llm.js            # strukturierte Metadatenextraktion mit Anthropic
-│  └─ embed.js          # Voyage-Embeddings für Dokumente und spätere Queries
+│  └─ embed.js          # Voyage-Embeddings für Dokumente und Queries
 ├─ test/
 │  ├─ config.test.js
 │  ├─ db.test.js
 │  ├─ ingest.test.js
+│  ├─ commands.test.js
 │  ├─ llm.test.js
 │  └─ embed.test.js
 ├─ sql/
@@ -143,7 +168,7 @@ wa-projekt-bot/
 
 ## Konfiguration
 
-Phase 3 benötigt genau diese fünf Variablen:
+Der Bot benötigt genau diese fünf Variablen:
 
 | Variable | Zweck |
 |---|---|
@@ -151,10 +176,10 @@ Phase 3 benötigt genau diese fünf Variablen:
 | `SUPABASE_SERVICE_KEY` | geheimer `service_role`-Key für den Bot-Prozess |
 | `TARGET_GROUP_JID` | exakte WhatsApp-JID der einzigen verarbeiteten Gruppe |
 | `ANTHROPIC_API_KEY` | API-Key für die Metadatenextraktion |
-| `VOYAGE_API_KEY` | API-Key für Dokument-Embeddings |
+| `VOYAGE_API_KEY` | API-Key für Dokument- und Query-Embeddings |
 
 Modelle und Vektordimension sind absichtlich nicht per Env überschreibbar, damit
-Ingest und spätere Suche denselben Embedding-Raum verwenden.
+Ingest und Suche denselben Embedding-Raum verwenden.
 
 ## Contributing
 

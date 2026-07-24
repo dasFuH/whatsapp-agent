@@ -7,6 +7,33 @@ Versionierung nach [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-24
+
+### Hinzugefügt
+
+- Phase-4-Befehl `/suche <text>`: Query-Embedding mit `voyage-4`, `input_type: query`
+  und denselben 1024 Float-Dimensionen wie der Ingest, RPC `suche_projekte` und
+  formatierte Top-5-Antwort direkt in WhatsApp
+- Command-Routing in `messages.upsert`: Textnachrichten mit `/`-Präfix gehen an
+  `src/commands.js` statt in den Ingest; alle anderen Nachrichten laufen unverändert
+  durch den Phase-3-Pfad
+- `searchProjekte` im Projekt-Repository; der RPC liefert nur `id`, `status` und
+  `titel` statt vollständiger Projektzeilen mit `raw_md` und Embedding
+- Netzfreie Phase-4-Tests für Befehls-Parsing, Routing, RPC-Vertrag,
+  Ergebnisformatierung, Eingabegrenzen und Fehlerpfade; Gesamtsuite 124/124
+
+### Sicherheit
+
+- Befehle werden nur aus der exakten `TARGET_GROUP_JID` und nie von der Bot-Nummer
+  selbst verarbeitet
+- Befehlsnamen sind auf `[a-z0-9_-]` und 32 Zeichen begrenzt; unbekannte Befehle
+  werden ohne Antwort und ohne Provider-Aufruf verworfen
+- Leere und über 500 Zeichen lange Suchanfragen werden vor dem kostenpflichtigen
+  Voyage-Aufruf abgewiesen
+- Titel und Status aus der Datenbank werden vor dem Senden bereinigt und begrenzt;
+  Provider- und Datenbankfehler erzeugen nur eine statische Fehlermeldung ohne
+  Details und werden bereinigt protokolliert
+
 ## [0.3.0] - 2026-07-24
 
 ### Hinzugefügt
@@ -69,7 +96,8 @@ Versionierung nach [Semantic Versioning](https://semver.org/lang/de/).
   Dateiname
 - SETUP.md mit vollständiger Spezifikation (Phasen 1–5, DB-Schema, Deployment)
 
-[Unreleased]: https://github.com/dasFuH/whatsapp-agent/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/dasFuH/whatsapp-agent/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/dasFuH/whatsapp-agent/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/dasFuH/whatsapp-agent/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/dasFuH/whatsapp-agent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dasFuH/whatsapp-agent/releases/tag/v0.1.0

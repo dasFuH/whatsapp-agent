@@ -248,6 +248,7 @@ export function createMessagesUpsertHandler({
   sock,
   targetGroupJid,
   ingestMessage,
+  handleCommand,
   log = console.log,
   logError = console.error,
 }) {
@@ -257,6 +258,17 @@ export function createMessagesUpsertHandler({
       if (message?.key?.remoteJid !== targetGroupJid) continue;
 
       try {
+        if (typeof handleCommand === 'function') {
+          const commandResult = await handleCommand(sock, message);
+          if (commandResult?.status !== 'ignored') {
+            log({
+              from: sanitizeLogText(message.pushName),
+              command: commandResult?.command,
+            });
+            continue;
+          }
+        }
+
         const { fileName, isMarkdown } = inspectMarkdownDocument(message);
         log({
           from: sanitizeLogText(message.pushName),

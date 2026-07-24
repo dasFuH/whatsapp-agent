@@ -7,6 +7,7 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
+import { createCommandHandler } from './commands.js';
 import { loadConfig } from './config.js';
 import { createProjectRepository } from './db.js';
 import { createEmbedder } from './embed.js';
@@ -32,6 +33,11 @@ async function start({
     targetGroupJid: config.targetGroupJid,
     projectRepository,
     extractMetadata,
+    embed,
+  });
+  const handleCommand = createCommandHandler({
+    targetGroupJid: config.targetGroupJid,
+    projectRepository,
     embed,
   });
 
@@ -61,6 +67,7 @@ async function start({
     sock,
     targetGroupJid: config.targetGroupJid,
     ingestMessage,
+    handleCommand,
   }));
 }
 

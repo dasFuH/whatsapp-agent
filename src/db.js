@@ -33,5 +33,18 @@ export function createProjectRepository(config, dependencies = {}) {
 
       if (error) throw error;
     },
+
+    async searchProjekte({ embedding, queryText, treffer }) {
+      const { data, error } = await supabase
+        .rpc('suche_projekte', {
+          query_embedding: embedding,
+          query_text: queryText,
+          treffer,
+        })
+        .select('id,status,titel');
+
+      if (error) throw error;
+      return Array.isArray(data) ? data : [];
+    },
   });
 }

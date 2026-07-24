@@ -560,6 +560,92 @@ test('messages handler filters the exact group before inspecting or logging', as
   assert.deepEqual(logs, []);
 });
 
+test('messages handler routes consumed commands away from the ingest path', async () => {
+  const logs = [];
+  const commandMessages = [];
+  const ingested = [];
+  const handler = createMessagesUpsertHandler({
+    sock: makeSocket(),
+    targetGroupJid: TARGET_GROUP_JID,
+    async ingestMessage(_sock, message) {
+      ingested.push(message.key.id);
+    },
+    async handleCommand(_sock, message) {
+      commandMessages.push(message.key.id);
+      return message.key.id === 'command-message'
+        ? { status: 'searched', command: 'suche' }
+        : { status: 'ignored', reason: 'not-a-command' };
+    },
+    log(value) {
+      logs.push(value);
+    },
+  });
+
+  await handler({
+    messages: [
+      makeMessage({ key: { ...makeMessage().key, id: 'command-message' } }),
+      makeMessage({ key: { ...makeMessage().key, id: 'document-message' } }),
+    ],
+  });
+
+  assert.deepEqual(commandMessages, ['command-message', 'document-message']);
+  assert.deepEqual(ingested, ['document-message']);
+  assert.deepEqual(logs, [
+    { from: 'Ada', command: 'suche' },
+    { from: 'Ada', isMd: true, file: 'projekt.md' },
+  ]);
+});
+
+test('messages handler keeps ingesting when no command handler is wired', async () => {
+  const ingested = [];
+  const handler = createMessagesUpsertHandler({
+    sock: makeSocket(),
+    targetGroupJid: TARGET_GROUP_JID,
+    async ingestMessage(_sock, message) {
+      ingested.push(message.key.id);
+    },
+    log() {},
+  });
+
+  await handler({ messages: [makeMessage()] });
+
+  assert.deepEqual(ingested, ['stable-message-id']);
+});
+
+test('messages handler logs a failing command safely and continues with the next message', async () => {
+  const errors = [];
+  const ingested = [];
+  const handler = createMessagesUpsertHandler({
+    sock: makeSocket(),
+    targetGroupJid: TARGET_GROUP_JID,
+    async ingestMessage(_sock, message) {
+      ingested.push(message.key.id);
+    },
+    async handleCommand(_sock, message) {
+      if (message.key.id !== 'command-message') {
+        return { status: 'ignored', reason: 'not-a-command' };
+      }
+      throw new Error(`Suche fehlgeschlagen\n${'sensitive-detail '.repeat(30)}`);
+    },
+    log() {},
+    logError(value) {
+      errors.push(value);
+    },
+  });
+
+  await handler({
+    messages: [
+      makeMessage({ key: { ...makeMessage().key, id: 'command-message' } }),
+      makeMessage({ key: { ...makeMessage().key, id: 'document-message' } }),
+    ],
+  });
+
+  assert.deepEqual(ingested, ['document-message']);
+  assert.equal(errors.length, 1);
+  assert.doesNotMatch(errors[0], /[\r\n\u0000]/);
+  assert.ok(errors[0].length <= 240);
+});
+
 test('messages handler bounds and sanitizes untrusted log fields without logging a JID', async () => {
   const logs = [];
   const handler = createMessagesUpsertHandler({
