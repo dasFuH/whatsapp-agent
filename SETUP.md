@@ -1,8 +1,9 @@
 # SETUP.md — WhatsApp Projekt-Datenbank (Ingest-Bot + semantische Suche)
 
-> **An Claude Code:** Bau dieses Projekt in den unten definierten Phasen. Committe nach
-> jeder Phase. Fang nicht mit Phase 2 an, bevor die Akzeptanzkriterien von Phase 1 erfüllt
-> sind. Frag nach, wenn Env-Variablen oder Zugänge fehlen — rate nichts.
+> **Projektstatus:** Phase 1 und die lokale Implementierung von Phase 2 sind abgeschlossen.
+> Die automatisierte Suite für Phase 2 besteht mit 23/23 Tests. Die Live-Abnahme mit
+> WhatsApp und Supabase sowie das Anwenden des Schemas auf ein Remote-Projekt stehen ohne
+> Zugangsdaten noch aus. Phase 3 ist nicht implementiert.
 
 ---
 
@@ -18,8 +19,10 @@ Zwei Probleme werden gelöst:
 - **Auffindbarkeit:** semantische + Keyword-Suche statt einer endlosen Chat-Liste.
 - **Doppelarbeit vermeiden:** Projekte haben einen Status (`frei` / `vergeben` / `erledigt`).
 
-Das rohe `.md` bleibt **1:1 erhalten** (`raw_md`) — es ist das eigentliche Artefakt. Alles
-andere (Titel, Summary, Tags, Embedding) ist eine Verständnis-/Such-Schicht darüber.
+Das rohe `.md` bleibt als gültiger UTF-8-Text unverändert in `raw_md` erhalten — es ist
+das eigentliche Artefakt. Ungültiges UTF-8, NUL-Bytes und Anhänge über 1 MiB werden
+abgewiesen. Alles andere (Titel, Summary, Tags, Embedding) ist eine Verständnis-/
+Such-Schicht darüber.
 
 ---
 
@@ -41,40 +44,51 @@ andere (Titel, Summary, Tags, Embedding) ist eine Verständnis-/Such-Schicht dar
 
 ## 3. Voraussetzungen (der Mensch stellt bereit)
 
+- Node.js ≥ 20.
 - Eine **Wegwerf-/Zweitnummer** für den Bot (inoffizielle WA-Anbindung → kleines
-  Sperrrisiko, nicht die private Nummer nehmen). Bot muss Mitglied der Zielgruppe sein.
-- Supabase-Projekt (URL + `service_role`-Key).
-- `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`.
+  Sperrrisiko, nicht die private Nummer nehmen). Der Bot muss Mitglied der Zielgruppe
+  sein.
+- Die aus Phase 1 bekannte JID genau dieser Zielgruppe.
+- Ein Supabase-Projekt mit HTTPS-URL und `service_role`-Key.
+- Für Phase 3 zusätzlich `ANTHROPIC_API_KEY` und `VOYAGE_API_KEY`; Phase 2 verwendet
+  diese beiden Schlüssel noch nicht.
 
 ### Env-Variablen (`.env`)
 
+```dotenv
+SUPABASE_URL=https://projekt.supabase.co
+SUPABASE_SERVICE_KEY=<service_role-key>
+TARGET_GROUP_JID=<gruppen-jid>@g.us
 ```
-ANTHROPIC_API_KEY=
-VOYAGE_API_KEY=
-SUPABASE_URL=
-SUPABASE_SERVICE_KEY=
-TARGET_GROUP_JID=          # JID der Gruppe, erst in Phase 1 auslesen und hier eintragen
-```
+
+Die Vorlage liegt in `.env.example`. `SUPABASE_URL` wird beim Start als HTTPS-URL
+validiert. Der `service_role`-Key ist ein Servergeheimnis und darf nicht in Logs,
+Client-Code oder Git landen. Vor dem Bot-Start `sql/schema.sql` im Supabase SQL-Editor
+anwenden; dieser Remote-Schritt ist in der lokalen Phase-2-Validierung noch nicht erfolgt.
 
 ---
 
 ## 4. Projektstruktur
 
-```
+```text
 wa-projekt-bot/
 ├─ src/
-│  ├─ index.js          # Baileys connect, Event-Loop, Routing
-│  ├─ ingest.js         # .md erkennen → Meta → Embedding → Supabase
-│  ├─ commands.js       # /suche /nehmen /liste
-│  ├─ llm.js            # extrahiereMeta() via Anthropic
-│  ├─ embed.js          # embed() via Voyage
-│  └─ db.js             # Supabase-Client + Helper
+│  ├─ index.js          # Konfiguration, Baileys-Verbindung und Event-Routing
+│  ├─ config.js         # Pflichtvariablen und HTTPS-Prüfung
+│  ├─ ingest.js         # Zielgruppenfilter, Download, Validierung und Bestätigung
+│  └─ db.js             # serverseitiger Supabase-Client und idempotenter Upsert
+├─ test/
+│  ├─ config.test.js
+│  ├─ db.test.js
+│  └─ ingest.test.js
 ├─ auth/                # Baileys useMultiFileAuthState (NICHT committen)
 ├─ sql/schema.sql
-├─ .env
-├─ .gitignore           # auth/ und .env rein!
+├─ .env.example
+├─ .gitignore           # auth/ und .env sind ausgeschlossen
 └─ package.json
 ```
+
+`commands.js`, `llm.js` und `embed.js` folgen erst in den Phasen 3–5.
 
 ---
 
@@ -87,7 +101,7 @@ create extension if not exists vector;
 
 create table projekte (
   id            bigint generated always as identity primary key,
-  wa_message_id text unique,                 -- Idempotenz: verhindert Doppel-Ingest
+  wa_message_id text unique,
   author_jid    text,
   author_name   text,
   created_at    timestamptz default now(),
@@ -95,11 +109,11 @@ create table projekte (
   summary       text,
   tags          text[],
   kategorie     text,
-  status        text default 'frei',         -- frei | vergeben | erledigt
+  status        text default 'frei',
   claimed_by    text,
-  raw_md        text,                         -- das Artefakt für den Coding-Agent
+  raw_md        text,
   md_url        text,
-  embedding     vector(1024),                 -- voyage-3 = 1024 dims
+  embedding     vector(1024),
   fts tsvector generated always as (
     to_tsvector('german',
       coalesce(titel,'') || ' ' || coalesce(summary,'') || ' ' || coalesce(raw_md,''))
@@ -109,7 +123,15 @@ create table projekte (
 create index on projekte using hnsw (embedding vector_cosine_ops);
 create index on projekte using gin  (fts);
 
--- Hybrid-Suche: semantisch (Vektor) + Keyword-Bonus, in einem Call
+alter table public.projekte enable row level security;
+
+revoke all on table public.projekte from anon, authenticated;
+revoke all on sequence public.projekte_id_seq from public, anon, authenticated;
+
+grant usage on schema public to service_role;
+grant select, insert, update, delete on table public.projekte to service_role;
+grant usage, select on sequence public.projekte_id_seq to service_role;
+
 create or replace function suche_projekte(
   query_embedding vector(1024),
   query_text      text,
@@ -120,86 +142,68 @@ returns setof projekte language sql stable as $$
   from projekte
   where status <> 'erledigt'
   order by
-    (embedding <=> query_embedding)                              -- kleiner = ähnlicher
-    - 0.15 * ts_rank(fts, plainto_tsquery('german', query_text)) -- Keyword-Bonus
+    (embedding <=> query_embedding)
+    - 0.15 * ts_rank(fts, plainto_tsquery('german', query_text))
   limit treffer;
 $$;
+
+revoke execute on function public.suche_projekte(vector, text, integer)
+  from public, anon, authenticated;
+grant execute on function public.suche_projekte(vector, text, integer)
+  to service_role;
 ```
+
+Dieser Block entspricht `sql/schema.sql`. RLS ist aktiv; `anon` und `authenticated`
+erhalten weder Tabellenrechte noch RPC-Ausführung. Der serverseitige Bot arbeitet mit
+`service_role`, dem die benötigten Rechte auf Schema, Tabelle, Identity-Sequenz und
+Suchfunktion explizit erteilt werden.
 
 ---
 
 ## 6. Phasen
 
-### Phase 1 — Verbindung & Erkennung (kein LLM, keine DB)
+### Phase 1 — Verbindung & Erkennung (implementiert)
 
-Nur connecten und beobachten. Ziel: `.md`-Posts sicher erkennen, bevor irgendwas
-Teureres passiert.
+Baileys verwendet `useMultiFileAuthState('./auth')`, zeigt den QR-Code beim ersten Login
+und verbindet sich nach einem Abbruch erneut, sofern WhatsApp keinen Logout meldet. Die in
+Phase 1 ermittelte Gruppen-JID wird für Phase 2 als `TARGET_GROUP_JID` vorausgesetzt.
 
-- Baileys mit `useMultiFileAuthState('./auth')`, QR beim ersten Start in die Konsole.
-- `connection.update` behandeln (QR anzeigen, bei `close` reconnecten, außer Logout).
-- `messages.upsert` loggen. Für jede Nachricht ausgeben: Absender (`pushName`),
-  `remoteJid`, und ob ein `documentMessage` mit `fileName` auf `.md` endet.
-- Die JID der Zielgruppe aus den Logs ablesen und in `.env` als `TARGET_GROUP_JID`
-  eintragen. Ab dann nur noch Nachrichten aus dieser JID verarbeiten.
-
-**Skelett `src/index.js`:**
-```js
-import makeWASocket, { useMultiFileAuthState, downloadMediaMessage } from '@whiskeysockets/baileys';
-import qrcode from 'qrcode-terminal';
-
-const { state, saveCreds } = await useMultiFileAuthState('./auth');
-const sock = makeWASocket({ auth: state });
-
-sock.ev.on('creds.update', saveCreds);
-sock.ev.on('connection.update', ({ connection, qr, lastDisconnect }) => {
-  if (qr) qrcode.generate(qr, { small: true });
-  if (connection === 'close') {
-    const loggedOut = lastDisconnect?.error?.output?.statusCode === 401;
-    if (!loggedOut) start();   // reconnect; bei 401 neu einloggen
-  }
-});
-
-sock.ev.on('messages.upsert', async ({ messages }) => {
-  for (const m of messages) {
-    if (m.key.fromMe) continue;
-    const doc = m.message?.documentMessage;
-    const isMd = doc?.fileName?.toLowerCase().endsWith('.md');
-    console.log({ from: m.pushName, jid: m.key.remoteJid, isMd, file: doc?.fileName });
-  }
-});
-```
-
-**Akzeptanzkriterium:** Wenn jemand eine `.md` in die Gruppe postet, erscheint im Log
-`isMd: true` mit korrektem Dateinamen. Kein Fehlalarm bei normalen Textnachrichten.
+Der aktuelle Phase-2-Handler protokolliert keine JIDs mehr. Er filtert zuerst auf die
+exakte Zielgruppe und untersucht erst dann Nachricht und Dateiname.
 
 ---
 
-### Phase 2 — Ingest ohne LLM (DB anbinden)
+### Phase 2 — Ingest ohne LLM (lokal implementiert)
 
-Jetzt `.md`-Inhalt runterladen und roh in Supabase schreiben. Noch keine Meta-Extraktion,
-kein Embedding.
+Phase 2 lädt `.md`-Anhänge aus genau einer konfigurierten Gruppe herunter und speichert
+ihren Rohtext in Supabase. Meta-Extraktion und Embeddings sind noch nicht enthalten.
 
-- `downloadMediaMessage(m, 'buffer', {})` → `buf.toString('utf-8')`.
-- Insert mit `wa_message_id = m.key.id` als `onConflict`-Key (Idempotenz — gleicher Post
-  darf nie zwei Zeilen erzeugen, auch bei Reconnect/Replay).
-- Bestätigung in die Gruppe senden.
+- `src/config.js` verlangt `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` und
+  `TARGET_GROUP_JID`; die Supabase-URL muss HTTPS verwenden.
+- Nachrichten vom Bot selbst, Nachrichten aus anderen Chats und Dateien ohne
+  case-insensitive `.md`-Endung werden vor dem Download ignoriert.
+- Eine vertrauenswürdige deklarierte Dateigröße wird vor dem Download geprüft. Der
+  tatsächlich geladene Buffer wird danach erneut geprüft; das Limit beträgt jeweils
+  1 MiB (`1_048_576` Bytes).
+- Der Buffer wird strikt als UTF-8 dekodiert. Ungültiges UTF-8 und NUL-Bytes werden
+  abgewiesen.
+- Eine stabile `m.key.id` ist Pflicht. Gespeichert werden `wa_message_id`,
+  `author_name`, `author_jid` und der unveränderte UTF-8-Text als `raw_md`.
+- `src/db.js` nutzt `@supabase/supabase-js` 2.109.0 als serverseitigen Client und führt
+  `.upsert(row, { onConflict: 'wa_message_id' })` aus. Der Unique-Constraint im Schema
+  verhindert eine zweite Zeile bei Reconnect oder Replay.
+- Die WhatsApp-Bestätigung wird erst nach erfolgreichem Upsert gesendet. Bei einem
+  Persistenzfehler wird nicht bestätigt.
 
-**Skelett `src/db.js`:**
-```js
-import { createClient } from '@supabase/supabase-js';
-export const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+**Lokale Verifikation:** `npm test` besteht mit 23/23 Tests für Konfiguration,
+HTTPS-Zwang, Datenbankvertrag und Rechte, Zielgruppenfilter, Idempotenz, Download- und
+UTF-8-Grenzen sowie die Reihenfolge „persistieren, dann bestätigen“.
 
-export async function upsertProjekt(row) {
-  const { error } = await supabase
-    .from('projekte')
-    .upsert(row, { onConflict: 'wa_message_id' });
-  if (error) throw error;
-}
-```
-
-**Akzeptanzkriterium:** Nach einem `.md`-Post steht eine Zeile in `projekte` mit
-gefülltem `raw_md`, `author_name`, `wa_message_id`. Zweifacher Empfang derselben Nachricht
-erzeugt **keine** zweite Zeile.
+**Noch offene Live-Abnahme:** `sql/schema.sql` muss in einem echten Supabase-Projekt
+angewendet und der Bot mit einer echten Zweitnummer, Zielgruppen-JID, Supabase-URL und
+`service_role`-Key gestartet werden. Danach sind ein realer `.md`-Post, die gespeicherte
+Zeile, die Bestätigung und ein Replay ohne Duplikat manuell zu prüfen. Diese Schritte
+wurden mangels Zugangsdaten und Remote-Schema noch nicht verifiziert.
 
 ---
 
@@ -336,7 +340,12 @@ reconnected der Bot selbst.
 - **JSON-Parsing der LLM-Antwort:** Modelle packen manchmal doch ```-Fences drumrum.
   Vor `JSON.parse` Fences strippen und einen Retry mit strengerem Prompt einbauen, statt
   hart zu crashen.
-- **`onConflict: 'wa_message_id'`** ist die einzige Doppel-Ingest-Bremse — nicht weglassen.
+- **Idempotenz:** `onConflict: 'wa_message_id'` im Bot und der Unique-Constraint auf
+  `wa_message_id` im Schema gehören zusammen — beides nicht weglassen.
+- **Supabase-Zugang:** Nur eine HTTPS-URL akzeptieren. Den `service_role`-Key ausschließlich
+  im serverseitigen Bot verwenden; RLS und Rechte aus `sql/schema.sql` nicht lockern.
+- **Dateigrenzen:** Nur `.md` aus der exakten Zielgruppe verarbeiten. Das 1-MiB-Limit vor
+  und nach dem Download prüfen und nur gültiges UTF-8 ohne NUL-Bytes speichern.
 - **Rate/Kosten:** Fable-Call nur bei tatsächlicher `.md` auslösen, nie bei jeder Nachricht.
 - **Gruppen-Scope:** ausschließlich `TARGET_GROUP_JID` verarbeiten, sonst reagiert der Bot
   in jedem Chat, in dem die Nummer steckt.

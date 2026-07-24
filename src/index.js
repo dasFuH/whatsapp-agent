@@ -1,9 +1,30 @@
-import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
-import qrcode from 'qrcode-terminal';
+import 'dotenv/config';
 
-async function start() {
+import makeWASocket, {
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+} from '@whiskeysockets/baileys';
+import qrcode from 'qrcode-terminal';
+import pino from 'pino';
+import { loadConfig } from './config.js';
+import { createProjectRepository } from './db.js';
+import {
+  createMessageIngestor,
+  createMessagesUpsertHandler,
+  formatSafeErrorMessage,
+} from './ingest.js';
+
+const logger = pino({ level: 'warn' });
+
+async function start({ config, projectRepository }) {
   const { state, saveCreds } = await useMultiFileAuthState('./auth');
-  const sock = makeWASocket({ auth: state });
+  const { version } = await fetchLatestBaileysVersion();
+  const sock = makeWASocket({ auth: state, version, logger });
+  const ingestMessage = createMessageIngestor({
+    targetGroupJid: config.targetGroupJid,
+    projectRepository,
+  });
 
   sock.ev.on('creds.update', saveCreds);
 
@@ -14,18 +35,28 @@ async function start() {
     if (connection === 'close') {
       const loggedOut = lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut;
       console.log('Verbindung getrennt.', loggedOut ? '(ausgeloggt, kein Reconnect)' : '(reconnect...)');
-      if (!loggedOut) start();
+      if (!loggedOut) {
+        start({ config, projectRepository }).catch((error) => {
+          console.error(`Reconnect fehlgeschlagen: ${formatSafeErrorMessage(error)}`);
+        });
+      }
     }
   });
 
-  sock.ev.on('messages.upsert', async ({ messages }) => {
-    for (const m of messages) {
-      if (m.key.fromMe) continue;
-      const doc = m.message?.documentMessage;
-      const isMd = doc?.fileName?.toLowerCase().endsWith('.md') ?? false;
-      console.log({ from: m.pushName, jid: m.key.remoteJid, isMd, file: doc?.fileName });
-    }
-  });
+  sock.ev.on('messages.upsert', createMessagesUpsertHandler({
+    sock,
+    targetGroupJid: config.targetGroupJid,
+    ingestMessage,
+  }));
 }
 
-start();
+async function main() {
+  const config = loadConfig();
+  const projectRepository = createProjectRepository(config);
+  await start({ config, projectRepository });
+}
+
+main().catch((error) => {
+  console.error(`Bot-Start fehlgeschlagen: ${formatSafeErrorMessage(error)}`);
+  process.exitCode = 1;
+});

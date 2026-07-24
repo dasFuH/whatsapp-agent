@@ -7,8 +7,28 @@ Versionierung nach [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
-- Phase 2: Ingest ohne LLM (rohe `.md` in Supabase schreiben, Idempotenz über
-  `wa_message_id`)
+### Hinzugefügt
+
+- Phase-2-Ingest für `.md`-Dokumente aus der konfigurierten Zielgruppe: Download,
+  strikte UTF-8-Dekodierung und Speicherung von `wa_message_id`, Autorendaten und
+  unverändertem `raw_md` in Supabase
+- Idempotenter Supabase-Upsert über den Unique-Key `wa_message_id` mit Bestätigung in
+  WhatsApp erst nach erfolgreicher Persistenz
+- Zentrale Phase-2-Konfiguration über `.env.example` sowie getrennte Module für
+  Konfiguration, Datenbankzugriff und Ingest
+- Automatisierte Tests für Konfiguration, Datenbankvertrag, Schema-Rechte,
+  Zielgruppenfilter, Größen-/UTF-8-Grenzen, Idempotenz und Bestätigungsreihenfolge
+
+### Sicherheit
+
+- Supabase-Verbindungen auf gültige HTTPS-URLs beschränkt und der Client ohne persistente
+  Benutzer-Session für den serverseitigen `service_role`-Betrieb konfiguriert
+- RLS für `projekte` aktiviert; Tabellen-, Sequenz- und RPC-Rechte für `anon` und
+  `authenticated` entzogen und explizit auf `service_role` begrenzt
+- Verarbeitung vor dem Download auf die exakte `TARGET_GROUP_JID` und `.md`-Endungen
+  beschränkt; Anhänge vor und nach dem Download auf 1 MiB begrenzt
+- Ungültiges UTF-8 und NUL-Bytes werden abgewiesen; nicht vertrauenswürdige Log- und
+  Fehlermeldungsfelder werden bereinigt und begrenzt
 
 ## [0.1.0] - 2026-07-12
 

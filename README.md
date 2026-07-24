@@ -1,79 +1,113 @@
 # wa-projekt-bot
 
-Ein WhatsApp-Bot für die MB/AI-Stammtisch-Community: Er hört in einer Gruppe mit, erfasst
-jede geteilte `.md`-Projektbeschreibung strukturiert in einer Datenbank, macht sie
-semantisch durchsuchbar und beantwortet Such-/Claim-Befehle direkt in der Gruppe — ohne
-App-Wechsel.
+Ein WhatsApp-Bot für die MB/AI-Stammtisch-Community: Er erfasst in einer fest
+konfigurierten Gruppe geteilte `.md`-Projektbeschreibungen in Supabase. Spätere Phasen
+ergänzen Metadaten, semantische Suche und Claim-Befehle direkt in WhatsApp.
 
-Löst zwei Probleme: **Auffindbarkeit** (semantische + Keyword-Suche statt endloser
-Chat-Historie) und **Doppelarbeit** (Projekte haben einen Status `frei` / `vergeben` /
-`erledigt`).
-
-Die vollständige Spezifikation inkl. aller Phasen, DB-Schema und Deployment steht in
-[SETUP.md](./SETUP.md).
+Die vollständige Spezifikation mit allen Phasen, Datenbankschema und Deployment-Hinweisen
+steht in [SETUP.md](./SETUP.md).
 
 ## Status
 
-🚧 **Phase 1 von 5** — Baileys-Verbindung steht, `.md`-Anhänge werden erkannt und geloggt.
-Noch keine Datenbank-Anbindung, kein Verstehen/Embedding, keine Commands.
+✅ **Phase 2 von 5 ist lokal implementiert und automatisiert verifiziert**
+(`npm test`: 23/23 Tests).
 
-Siehe [CHANGELOG.md](./CHANGELOG.md) für den Verlauf und SETUP.md Abschnitt 6 für die
-restlichen Phasen.
+Der aktuelle Bot verarbeitet ausschließlich `.md`-Dokumente aus der exakten
+`TARGET_GROUP_JID`, akzeptiert höchstens 1 MiB gültiges UTF-8, schreibt den Rohtext per
+Supabase-Upsert mit `wa_message_id` als Idempotenzschlüssel und bestätigt erst nach
+erfolgreicher Speicherung. Meta-Extraktion, Embeddings und Commands beginnen ab Phase 3.
+
+Noch ausstehend ist die Live-Abnahme mit einer echten WhatsApp-Gruppe und einem echten
+Supabase-Projekt. Das Anwenden von [sql/schema.sql](./sql/schema.sql), der reale
+Medien-Download, die Bestätigung in WhatsApp und der Idempotenznachweis gegen die
+Remote-Datenbank wurden ohne Zugangsdaten nicht verifiziert.
 
 ## Tech-Stack
 
-| Baustein            | Wahl |
-|---------------------|------|
-| WA-Anbindung        | [Baileys](https://github.com/WhiskeySockets/Baileys) (`@whiskeysockets/baileys`) |
-| DB                  | Supabase / Postgres + pgvector |
-| Verstehen (MD→Meta) | Anthropic Claude |
-| Embedding           | Voyage `voyage-3` |
-| Runtime             | Node.js ≥ 20 |
+| Baustein | Wahl |
+|---|---|
+| WhatsApp-Anbindung | [Baileys](https://github.com/WhiskeySockets/Baileys) (`@whiskeysockets/baileys`) |
+| Datenbank | Supabase / Postgres + pgvector, `@supabase/supabase-js` 2.109.0 |
+| Runtime | Node.js ≥ 20 |
+| Ab Phase 3 geplant | Anthropic Claude für Metadaten, Voyage `voyage-3` für Embeddings |
 
 ## Quick Start
 
-Voraussetzungen: Node.js ≥ 20, eine Wegwerf-/Zweitnummer für WhatsApp (nicht die private
-Nummer).
+Voraussetzungen:
+
+- Node.js ≥ 20
+- eine Wegwerf-/Zweitnummer für WhatsApp, die Mitglied der Zielgruppe ist
+- ein Supabase-Projekt mit HTTPS-URL und `service_role`-Key
+- die aus Phase 1 bekannte Gruppen-JID der Zielgruppe
+
+Abhängigkeiten installieren und die lokale Konfiguration anlegen:
 
 ```bash
 npm install
+cp .env.example .env
+```
+
+Unter PowerShell lautet der zweite Befehl `Copy-Item .env.example .env`.
+
+Anschließend `.env` ohne Platzhalter befüllen:
+
+```dotenv
+SUPABASE_URL=https://projekt.supabase.co
+SUPABASE_SERVICE_KEY=<service_role-key>
+TARGET_GROUP_JID=<gruppen-jid>@g.us
+```
+
+`SUPABASE_URL` muss eine gültige HTTPS-URL sein. Der `service_role`-Key gehört nur in den
+serverseitigen Bot-Prozess und darf weder veröffentlicht noch an Clients ausgeliefert
+werden. `.env` und `auth/` sind ignoriert und dürfen nicht committet werden.
+
+Vor dem Bot-Start [sql/schema.sql](./sql/schema.sql) im Supabase SQL-Editor anwenden.
+Das Schema aktiviert RLS, entzieht `anon` und `authenticated` die Rechte und gewährt die
+benötigten Tabellen-, Sequenz- und RPC-Rechte nur `service_role`.
+
+```bash
+npm test
 npm start
 ```
 
-Beim ersten Start erscheint ein QR-Code in der Konsole — mit WhatsApp auf dem Bot-Handy
-scannen (Verknüpfte Geräte). Danach bleibt die Session in `auth/` gespeichert und der Bot
-verbindet sich automatisch neu.
-
-`auth/` und `.env` sind in `.gitignore` — niemals committen, sie enthalten Zugangsdaten
-bzw. eine übernehmbare WhatsApp-Session.
+Beim ersten Start erscheint ein QR-Code in der Konsole. Nach dem Scan über „Verknüpfte
+Geräte“ bleibt die WhatsApp-Session in `auth/` gespeichert; bei einem normalen
+Verbindungsabbruch verbindet sich der Bot erneut.
 
 ## Projektstruktur
 
-```
+```text
 wa-projekt-bot/
 ├─ src/
-│  └─ index.js     # Baileys connect, Event-Loop (Phase 1)
-├─ auth/           # Baileys Session (nicht committen)
+│  ├─ index.js          # Konfiguration, Baileys-Verbindung und Event-Routing
+│  ├─ config.js         # Pflichtvariablen und HTTPS-Prüfung
+│  ├─ db.js             # serverseitiger Supabase-Client und idempotenter Upsert
+│  └─ ingest.js         # Zielgruppenfilter, Download, Validierung und Bestätigung
+├─ test/
+│  ├─ config.test.js
+│  ├─ db.test.js
+│  └─ ingest.test.js
+├─ sql/
+│  └─ schema.sql        # Tabelle, Indizes, RLS und Rechte
+├─ .env.example
+├─ auth/                # lokale Baileys-Session, nicht committen
 └─ package.json
 ```
 
-Weitere Module (`ingest.js`, `commands.js`, `llm.js`, `embed.js`, `db.js`) kommen in
-späteren Phasen dazu, siehe SETUP.md.
-
 ## Konfiguration
 
-Env-Variablen (`.env`, ab Phase 2 relevant):
+Phase 2 benötigt genau diese drei Variablen:
 
-```
-ANTHROPIC_API_KEY=
-VOYAGE_API_KEY=
-SUPABASE_URL=
-SUPABASE_SERVICE_KEY=
-TARGET_GROUP_JID=
-```
+| Variable | Zweck |
+|---|---|
+| `SUPABASE_URL` | HTTPS-URL des Supabase-Projekts |
+| `SUPABASE_SERVICE_KEY` | geheimer `service_role`-Key für den Bot-Prozess |
+| `TARGET_GROUP_JID` | exakte WhatsApp-JID der einzigen verarbeiteten Gruppe |
+
+`ANTHROPIC_API_KEY` und `VOYAGE_API_KEY` werden erst mit Phase 3 benötigt.
 
 ## Contributing
 
 Dies ist ein Einzelprojekt für die eigene Community, kein offenes Projekt mit
-Contribution-Prozess. Änderungen laufen phasenweise nach SETUP.md: Akzeptanzkriterien
-einer Phase erfüllen, committen, dann erst die nächste Phase angehen.
+Contribution-Prozess. Änderungen laufen phasenweise nach SETUP.md und müssen vor einem
+Release gegen die jeweiligen Akzeptanzkriterien validiert werden.
