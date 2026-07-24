@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   MAX_METADATA_INPUT_CHARS,
+  MAX_METADATA_OUTPUT_TOKENS,
   METADATA_MODEL,
   createMetadataExtractor,
   normalizeMetadata,
@@ -66,7 +67,8 @@ test('metadata extractor sends the exact bounded GA structured-output request an
   assert.equal(calls.length, 1);
   assert.equal(calls[0].model, METADATA_MODEL);
   assert.equal(calls[0].model, 'claude-fable-5');
-  assert.equal(calls[0].max_tokens, 2_048);
+  assert.equal(calls[0].max_tokens, MAX_METADATA_OUTPUT_TOKENS);
+  assert.equal(calls[0].max_tokens, 8_192);
   assert.equal(typeof calls[0].system, 'string');
   assert.deepEqual(calls[0].messages, [{
     role: 'user',

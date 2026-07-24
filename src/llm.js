@@ -2,6 +2,9 @@ import Anthropic from '@anthropic-ai/sdk';
 
 export const METADATA_MODEL = 'claude-fable-5';
 export const MAX_METADATA_INPUT_CHARS = 12_000;
+// claude-fable-5 denkt immer; Thinking-Tokens zählen gegen max_tokens. Genug
+// Kopffreiheit lassen, damit die JSON-Metadaten nicht abgeschnitten werden.
+export const MAX_METADATA_OUTPUT_TOKENS = 8_192;
 
 const METADATA_KEYS = Object.freeze([
   'titel',
@@ -117,7 +120,7 @@ export function createMetadataExtractor({ apiKey }, dependencies = {}) {
 
     const response = await client.messages.create({
       model: METADATA_MODEL,
-      max_tokens: 2_048,
+      max_tokens: MAX_METADATA_OUTPUT_TOKENS,
       system: SYSTEM_PROMPT,
       messages: [{
         role: 'user',
