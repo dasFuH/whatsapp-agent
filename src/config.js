@@ -2,6 +2,8 @@ const REQUIRED_VARIABLES = [
   'SUPABASE_URL',
   'SUPABASE_SERVICE_KEY',
   'TARGET_GROUP_JID',
+  'ANTHROPIC_API_KEY',
+  'VOYAGE_API_KEY',
 ];
 
 function readRequiredVariable(env, name) {
@@ -41,5 +43,7 @@ export function loadConfig(env = process.env) {
     supabaseUrl: values.SUPABASE_URL,
     supabaseServiceKey: values.SUPABASE_SERVICE_KEY,
     targetGroupJid: values.TARGET_GROUP_JID,
+    anthropicApiKey: values.ANTHROPIC_API_KEY,
+    voyageApiKey: values.VOYAGE_API_KEY,
   });
 }

@@ -78,6 +78,109 @@ test('project repository surfaces Supabase upsert errors', async () => {
   await assert.rejects(repository.upsertProjekt({}), databaseError);
 });
 
+test('project repository looks up one project by message ID with the minimal Phase 3 fields', async () => {
+  const calls = [];
+  const expectedRow = {
+    wa_message_id: 'message-1',
+    raw_md: '# Projekt',
+    titel: null,
+    summary: null,
+    tags: null,
+    kategorie: null,
+    embedding: null,
+  };
+  const repository = createProjectRepository(
+    {
+      supabaseUrl: 'https://example.supabase.co',
+      supabaseServiceKey: 'service-role-key',
+    },
+    {
+      createClient() {
+        return {
+          from(table) {
+            calls.push(['from', table]);
+            return {
+              select(columns) {
+                calls.push(['select', columns]);
+                return {
+                  eq(column, value) {
+                    calls.push(['eq', column, value]);
+                    return {
+                      async maybeSingle() {
+                        calls.push(['maybeSingle']);
+                        return { data: expectedRow, error: null };
+                      },
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    },
+  );
+
+  const row = await repository.findProjektByMessageId('message-1');
+
+  assert.strictEqual(row, expectedRow);
+  assert.deepEqual(calls, [
+    ['from', 'projekte'],
+    ['select', 'wa_message_id,raw_md,titel,summary,tags,kategorie,embedding'],
+    ['eq', 'wa_message_id', 'message-1'],
+    ['maybeSingle'],
+  ]);
+});
+
+test('project repository returns null for no lookup match and surfaces lookup errors', async (t) => {
+  function makeRepository(result) {
+    return createProjectRepository(
+      {
+        supabaseUrl: 'https://example.supabase.co',
+        supabaseServiceKey: 'service-role-key',
+      },
+      {
+        createClient() {
+          return {
+            from() {
+              return {
+                select() {
+                  return {
+                    eq() {
+                      return {
+                        async maybeSingle() {
+                          return result;
+                        },
+                      };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        },
+      },
+    );
+  }
+
+  await t.test('returns null', async () => {
+    assert.equal(
+      await makeRepository({ data: null, error: null })
+        .findProjektByMessageId('missing'),
+      null,
+    );
+  });
+
+  await t.test('surfaces errors', async () => {
+    const databaseError = new Error('lookup unavailable');
+    await assert.rejects(
+      makeRepository({ data: null, error: databaseError })
+        .findProjektByMessageId('message-1'),
+      databaseError,
+    );
+  });
+});
+
 test('schema locks project data and RPC access to the service role', async () => {
   const schema = await readFile(new URL('../sql/schema.sql', import.meta.url), 'utf-8');
 

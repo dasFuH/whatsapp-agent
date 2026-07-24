@@ -1,57 +1,59 @@
 # SETUP.md — WhatsApp Projekt-Datenbank (Ingest-Bot + semantische Suche)
 
-> **Projektstatus:** Phase 1 und die lokale Implementierung von Phase 2 sind abgeschlossen.
-> Die automatisierte Suite für Phase 2 besteht mit 23/23 Tests. Die Live-Abnahme mit
-> WhatsApp und Supabase sowie das Anwenden des Schemas auf ein Remote-Projekt stehen ohne
-> Zugangsdaten noch aus. Phase 3 ist nicht implementiert.
+> **Projektstatus:** Phase 1 bis 3 sind lokal implementiert. Die aktuelle
+> automatisierte Suite besteht mit 80/80 Tests. Die Live-Abnahme mit Anthropic,
+> Voyage, WhatsApp und Supabase sowie das Anwenden des Schemas auf ein
+> Remote-Projekt stehen ohne Zugangsdaten noch aus.
 
 ---
 
 ## 1. Kontext & Ziel
 
-Eine WhatsApp-Community (MB/AI Stammtisch) teilt Projekte als Nachricht mit angehängter
-`.md`-Datei. Diese `.md` ist eine Nachbau-Anleitung (Format, das ein Coding-Agent direkt
-verwerten kann). Ziel: Ein Bot hört in der Gruppe mit, erfasst jede geteilte `.md`
-strukturiert in einer Datenbank, macht sie semantisch durchsuchbar und beantwortet
-Such-/Claim-Befehle **direkt in der Gruppe** — niemand muss die App wechseln.
+Eine WhatsApp-Community (MB/AI Stammtisch) teilt Projekte als Nachricht mit
+angehängter `.md`-Datei. Diese `.md` ist eine Nachbau-Anleitung, die ein
+Coding-Agent direkt verwerten kann. Der Bot erfasst sie strukturiert in einer
+Datenbank. Spätere Phasen machen die Projekte direkt in WhatsApp semantisch
+durchsuchbar und ergänzen Claim-Befehle.
 
 Zwei Probleme werden gelöst:
-- **Auffindbarkeit:** semantische + Keyword-Suche statt einer endlosen Chat-Liste.
-- **Doppelarbeit vermeiden:** Projekte haben einen Status (`frei` / `vergeben` / `erledigt`).
 
-Das rohe `.md` bleibt als gültiger UTF-8-Text unverändert in `raw_md` erhalten — es ist
-das eigentliche Artefakt. Ungültiges UTF-8, NUL-Bytes und Anhänge über 1 MiB werden
-abgewiesen. Alles andere (Titel, Summary, Tags, Embedding) ist eine Verständnis-/
-Such-Schicht darüber.
+- **Auffindbarkeit:** semantische + Keyword-Suche statt einer endlosen Chat-Liste.
+- **Doppelarbeit vermeiden:** Projekte haben einen Status (`frei` / `vergeben` /
+  `erledigt`).
+
+Das rohe `.md` bleibt als gültiger UTF-8-Text unverändert in `raw_md` erhalten;
+es ist das eigentliche Artefakt. Ungültiges UTF-8, NUL-Bytes und Anhänge über
+1 MiB werden abgewiesen. Titel, Summary, Tags und Embedding bilden die
+Verständnis- und Suchschicht darüber.
 
 ---
 
 ## 2. Tech-Stack
 
-| Baustein            | Wahl                          | Grund |
-|---------------------|-------------------------------|-------|
-| WA-Anbindung        | **Baileys** (`@whiskeysockets/baileys`) | reine WebSocket-Impl, kein Chromium/Puppeteer → schlanker VPS-Prozess |
-| DB                  | **Supabase / Postgres** + `pgvector` | Vektorsuche eingebaut, schon vorhanden |
-| Verstehen (MD→Meta) | **Anthropic Fable/Claude**    | JSON-Extraktion aus MD |
-| Embedding           | **Voyage `voyage-3`** (1024 dims) | starkes Deutsch, managed. Alternativ `bge-m3` self-hosted, wenn nichts rausgehen soll |
-| Runtime             | Node.js ≥ 20, systemd auf dem VPS | `Restart=always`, Outbound-only (kein offener Port, kein Caddy nötig) |
+| Baustein | Wahl | Grund |
+|---|---|---|
+| WA-Anbindung | **Baileys** (`@whiskeysockets/baileys`) | reine WebSocket-Implementierung, kein Chromium/Puppeteer |
+| DB | **Supabase / Postgres** + `pgvector` | Vektorsuche und serverseitiger Zugriff |
+| Verstehen (MD→Meta) | **Anthropic `claude-fable-5`** | GA Structured Outputs mit `effort: low` |
+| Embedding | **Voyage `voyage-4`**, 1024 Float-Dimensionen | fester Vektorraum für Dokumente und spätere Queries |
+| Runtime | Node.js ≥ 20, systemd auf dem VPS | schlanker Outbound-only-Prozess |
 
-> **Wichtige Trennung:** Fable/Claude ist fürs **Verstehen** (Titel, Summary, Tags).
-> Das Embedding-Modell ist fürs **Suchen**. Anthropic liefert keine Embeddings — nicht
-> verwechseln.
+Fable/Claude extrahiert `titel`, `summary`, `tags` und `kategorie`.
+Voyage erzeugt den Suchvektor; Anthropic liefert keine Embeddings. Modelle und
+Dimension sind im Code festgelegt, damit Ingest und spätere Suche denselben
+Embedding-Raum verwenden.
 
 ---
 
-## 3. Voraussetzungen (der Mensch stellt bereit)
+## 3. Voraussetzungen
 
 - Node.js ≥ 20.
-- Eine **Wegwerf-/Zweitnummer** für den Bot (inoffizielle WA-Anbindung → kleines
-  Sperrrisiko, nicht die private Nummer nehmen). Der Bot muss Mitglied der Zielgruppe
-  sein.
+- Eine **Wegwerf-/Zweitnummer** für den Bot. Baileys ist eine inoffizielle
+  WhatsApp-Anbindung und bringt ein Sperrrisiko mit; nicht die private Nummer
+  verwenden. Der Bot muss Mitglied der Zielgruppe sein.
 - Die aus Phase 1 bekannte JID genau dieser Zielgruppe.
 - Ein Supabase-Projekt mit HTTPS-URL und `service_role`-Key.
-- Für Phase 3 zusätzlich `ANTHROPIC_API_KEY` und `VOYAGE_API_KEY`; Phase 2 verwendet
-  diese beiden Schlüssel noch nicht.
+- Ein Anthropic-API-Key und ein Voyage-API-Key.
 
 ### Env-Variablen (`.env`)
 
@@ -59,12 +61,30 @@ Such-Schicht darüber.
 SUPABASE_URL=https://projekt.supabase.co
 SUPABASE_SERVICE_KEY=<service_role-key>
 TARGET_GROUP_JID=<gruppen-jid>@g.us
+ANTHROPIC_API_KEY=<anthropic-api-key>
+VOYAGE_API_KEY=<voyage-api-key>
 ```
 
-Die Vorlage liegt in `.env.example`. `SUPABASE_URL` wird beim Start als HTTPS-URL
-validiert. Der `service_role`-Key ist ein Servergeheimnis und darf nicht in Logs,
-Client-Code oder Git landen. Vor dem Bot-Start `sql/schema.sql` im Supabase SQL-Editor
-anwenden; dieser Remote-Schritt ist in der lokalen Phase-2-Validierung noch nicht erfolgt.
+Alle fünf Variablen sind ab Phase 3 Pflicht. Die Vorlage liegt in
+`.env.example`. `SUPABASE_URL` wird beim Start als HTTPS-URL validiert. Der
+`service_role`-Key und beide Provider-Keys sind Servergeheimnisse und dürfen
+nicht in Logs, Client-Code oder Git landen. `.env` und `auth/` sind ignoriert
+und dürfen nicht committet werden.
+
+Vor dem Bot-Start `sql/schema.sql` im Supabase SQL-Editor anwenden. Dieser
+Remote-Schritt ist in der lokalen Phase-3-Validierung noch nicht erfolgt.
+
+### Externe Datenverarbeitung
+
+- Für ein neues oder unvollständiges Projekt gehen bis zu 12.000 Zeichen des
+  rohen Markdown an Anthropic. Für `claude-fable-5` gilt laut
+  [Anthropic-Dokumentation](https://platform.claude.com/docs/en/manage-claude/api-and-data-retention)
+  eine 30-tägige Aufbewahrung.
+- An Voyage gehen Titel und Zusammenfassung, nicht das vollständige Markdown.
+- Projektdateien dürfen keine Secrets, Zugangsdaten oder unnötigen sensiblen
+  beziehungsweise personenbezogenen Daten enthalten. Vor Livebetrieb die
+  Community über die externe Verarbeitung informieren und die eigenen
+  Datenschutzanforderungen klären.
 
 ---
 
@@ -73,22 +93,26 @@ anwenden; dieser Remote-Schritt ist in der lokalen Phase-2-Validierung noch nich
 ```text
 wa-projekt-bot/
 ├─ src/
-│  ├─ index.js          # Konfiguration, Baileys-Verbindung und Event-Routing
+│  ├─ index.js          # Konfiguration, Clients, Baileys-Verbindung und Routing
 │  ├─ config.js         # Pflichtvariablen und HTTPS-Prüfung
-│  ├─ ingest.js         # Zielgruppenfilter, Download, Validierung und Bestätigung
-│  └─ db.js             # serverseitiger Supabase-Client und idempotenter Upsert
+│  ├─ ingest.js         # Filter, Download, Replay, Anreicherung und Bestätigung
+│  ├─ db.js             # Supabase-Lookup und idempotenter Upsert
+│  ├─ llm.js            # Anthropic Structured Outputs und Metadatenvalidierung
+│  └─ embed.js          # Voyage-Embeddings für document/query
 ├─ test/
 │  ├─ config.test.js
 │  ├─ db.test.js
-│  └─ ingest.test.js
-├─ auth/                # Baileys useMultiFileAuthState (NICHT committen)
+│  ├─ ingest.test.js
+│  ├─ llm.test.js
+│  └─ embed.test.js
+├─ auth/                # Baileys useMultiFileAuthState, nicht committen
 ├─ sql/schema.sql
 ├─ .env.example
 ├─ .gitignore           # auth/ und .env sind ausgeschlossen
 └─ package.json
 ```
 
-`commands.js`, `llm.js` und `embed.js` folgen erst in den Phasen 3–5.
+`commands.js` folgt mit den WhatsApp-Befehlen in den Phasen 4 und 5.
 
 ---
 
@@ -153,10 +177,13 @@ grant execute on function public.suche_projekte(vector, text, integer)
   to service_role;
 ```
 
-Dieser Block entspricht `sql/schema.sql`. RLS ist aktiv; `anon` und `authenticated`
-erhalten weder Tabellenrechte noch RPC-Ausführung. Der serverseitige Bot arbeitet mit
-`service_role`, dem die benötigten Rechte auf Schema, Tabelle, Identity-Sequenz und
-Suchfunktion explizit erteilt werden.
+Dieser Block entspricht `sql/schema.sql`. RLS ist aktiv; `anon` und
+`authenticated` erhalten weder Tabellenrechte noch RPC-Ausführung. Der
+serverseitige Bot arbeitet mit `service_role`, dem die benötigten Rechte auf
+Schema, Tabelle, Identity-Sequenz und Suchfunktion explizit erteilt werden.
+
+Die Phase-3-Spalten und `vector(1024)` waren bereits vorhanden. Für Phase 3 ist
+daher keine DDL-Änderung erforderlich.
 
 ---
 
@@ -164,122 +191,132 @@ Suchfunktion explizit erteilt werden.
 
 ### Phase 1 — Verbindung & Erkennung (implementiert)
 
-Baileys verwendet `useMultiFileAuthState('./auth')`, zeigt den QR-Code beim ersten Login
-und verbindet sich nach einem Abbruch erneut, sofern WhatsApp keinen Logout meldet. Die in
-Phase 1 ermittelte Gruppen-JID wird für Phase 2 als `TARGET_GROUP_JID` vorausgesetzt.
+Baileys verwendet `useMultiFileAuthState('./auth')`, zeigt den QR-Code beim
+ersten Login und verbindet sich nach einem Abbruch erneut, sofern WhatsApp
+keinen Logout meldet. Die in Phase 1 ermittelte Gruppen-JID wird als
+`TARGET_GROUP_JID` vorausgesetzt.
 
-Der aktuelle Phase-2-Handler protokolliert keine JIDs mehr. Er filtert zuerst auf die
-exakte Zielgruppe und untersucht erst dann Nachricht und Dateiname.
+Der aktuelle Handler protokolliert keine JIDs. Er filtert zuerst auf die exakte
+Zielgruppe und untersucht erst dann Nachricht und Dateiname.
 
 ---
 
 ### Phase 2 — Ingest ohne LLM (lokal implementiert)
 
-Phase 2 lädt `.md`-Anhänge aus genau einer konfigurierten Gruppe herunter und speichert
-ihren Rohtext in Supabase. Meta-Extraktion und Embeddings sind noch nicht enthalten.
+Phase 2 führte den sicheren Rohdaten-Ingest ein:
 
-- `src/config.js` verlangt `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` und
-  `TARGET_GROUP_JID`; die Supabase-URL muss HTTPS verwenden.
-- Nachrichten vom Bot selbst, Nachrichten aus anderen Chats und Dateien ohne
-  case-insensitive `.md`-Endung werden vor dem Download ignoriert.
-- Eine vertrauenswürdige deklarierte Dateigröße wird vor dem Download geprüft. Der
-  tatsächlich geladene Buffer wird danach erneut geprüft; das Limit beträgt jeweils
+- Nachrichten vom Bot selbst, andere Chats und Dateien ohne case-insensitive
+  `.md`-Endung werden vor dem Download ignoriert.
+- Die deklarierte Dateigröße wird, wenn vertrauenswürdig, vor dem Download
+  geprüft. Der geladene Buffer wird danach erneut geprüft. Das Limit beträgt
   1 MiB (`1_048_576` Bytes).
-- Der Buffer wird strikt als UTF-8 dekodiert. Ungültiges UTF-8 und NUL-Bytes werden
-  abgewiesen.
+- Der Buffer wird strikt als UTF-8 dekodiert. Ungültiges UTF-8 und NUL-Bytes
+  werden abgewiesen.
 - Eine stabile `m.key.id` ist Pflicht. Gespeichert werden `wa_message_id`,
   `author_name`, `author_jid` und der unveränderte UTF-8-Text als `raw_md`.
-- `src/db.js` nutzt `@supabase/supabase-js` 2.109.0 als serverseitigen Client und führt
-  `.upsert(row, { onConflict: 'wa_message_id' })` aus. Der Unique-Constraint im Schema
-  verhindert eine zweite Zeile bei Reconnect oder Replay.
-- Die WhatsApp-Bestätigung wird erst nach erfolgreichem Upsert gesendet. Bei einem
-  Persistenzfehler wird nicht bestätigt.
+- Der Supabase-Upsert nutzt `wa_message_id` als Konfliktschlüssel. Der
+  Unique-Constraint verhindert eine zweite Zeile bei Replay.
+- Eine WhatsApp-Bestätigung folgt erst auf die erfolgreiche Persistenz.
 
-**Lokale Verifikation:** `npm test` besteht mit 23/23 Tests für Konfiguration,
-HTTPS-Zwang, Datenbankvertrag und Rechte, Zielgruppenfilter, Idempotenz, Download- und
-UTF-8-Grenzen sowie die Reihenfolge „persistieren, dann bestätigen“.
-
-**Noch offene Live-Abnahme:** `sql/schema.sql` muss in einem echten Supabase-Projekt
-angewendet und der Bot mit einer echten Zweitnummer, Zielgruppen-JID, Supabase-URL und
-`service_role`-Key gestartet werden. Danach sind ein realer `.md`-Post, die gespeicherte
-Zeile, die Bestätigung und ein Replay ohne Duplikat manuell zu prüfen. Diese Schritte
-wurden mangels Zugangsdaten und Remote-Schema noch nicht verifiziert.
+Die damalige Phase-2-Suite bestand mit 23/23 Tests. Die aktuelle
+Phase-3-Suite enthält diese Regressionen und besteht mit 80/80 Tests.
 
 ---
 
-### Phase 3 — Verstehen & Suchbar machen (Fable + Embedding)
+### Phase 3 — Verstehen & Suchbar machen (lokal implementiert)
 
-Zwischen Download und Insert die zwei Schichten einziehen.
+Phase 3 ergänzt zwei fest konfigurierte Provider-Schichten.
 
-**`src/llm.js` — Meta-Extraktion (Anthropic):**
-```js
-import Anthropic from '@anthropic-ai/sdk';
-const client = new Anthropic();
+**`src/llm.js` — Metadaten**
 
-const SYSTEM = `Du extrahierst Metadaten aus einer Markdown-Projektbeschreibung.
-Antworte AUSSCHLIESSLICH mit JSON, ohne Markdown-Fences, ohne Fließtext:
-{"titel": string, "summary": string (max 1 Satz), "tags": string[], "kategorie": string}`;
+- Festes Modell: `claude-fable-5`.
+- GA Structured Outputs mit `output_config.effort: low` und einem JSON-Schema
+  ohne zusätzliche Felder.
+- Höchstens 12.000 Zeichen Markdown pro Anfrage.
+- Akzeptiert nur `stop_reason: end_turn`; Refusals und andere Stop-Gründe
+  schlagen geschlossen fehl.
+- Validiert lokal genau `titel`, `summary`, `tags` und `kategorie`, einschließlich
+  Typen, Leerwerten und Längen. Unbekannte Felder werden abgewiesen.
 
-export async function extrahiereMeta(md) {
-  const res = await client.messages.create({
-    model: 'claude-fable-5',        // ggf. auf verfügbares Modell anpassen
-    max_tokens: 512,
-    system: SYSTEM,
-    messages: [{ role: 'user', content: md.slice(0, 12000) }],
-  });
-  const text = res.content.find(b => b.type === 'text')?.text ?? '{}';
-  return JSON.parse(text.trim());   // bei Parse-Fehler: siehe Fallstricke
-}
-```
+**`src/embed.js` — Embeddings**
 
-**`src/embed.js` — Embedding (Voyage):**
-```js
-export async function embed(text) {
-  const res = await fetch('https://api.voyageai.com/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${process.env.VOYAGE_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ model: 'voyage-3', input: text }),
-  });
-  const data = await res.json();
-  return data.data[0].embedding;   // Array mit 1024 Floats
-}
-```
+- Fester HTTPS-Endpunkt und festes Modell `voyage-4`.
+- `input_type: document` beim Ingest, `truncation: false`,
+  `output_dimension: 1024` und `output_dtype: float`.
+- Eingabe beim Ingest ist `${titel}\n${summary}`.
+- Akzeptiert nur genau einen Datensatz mit Index 0 und exakt 1024 endlichen
+  Zahlen für das erwartete Modell.
+- Timeout sowie höchstens drei Versuche; Retries nur für HTTP 429 und 5xx.
 
-**Ingest-Kern (`src/ingest.js`), Reihenfolge:**
-```js
-const meta = await extrahiereMeta(md);                 // 1. Verstehen
-const emb  = await embed(`${meta.titel}\n${meta.summary}`); // 2. Suchbar machen
-await upsertProjekt({
-  wa_message_id: m.key.id,
-  author_name:   m.pushName,
-  author_jid:    m.key.participant ?? m.key.remoteJid,
-  raw_md: md,
-  ...meta,
-  embedding: emb,
-});
-await sock.sendMessage(m.key.remoteJid, { text: `✅ „${meta.titel}" erfasst.` });
-```
+Phase 4 muss Suchanfragen mit demselben `voyage-4`, derselben Dimension und
+`input_type: query` einbetten. Unterschiedliche Modelle oder Dimensionen dürfen
+nicht im selben Vektorraum gemischt werden.
 
-**Akzeptanzkriterium:** Nach einem Post sind `titel`, `summary`, `tags`, `kategorie` und
-`embedding` gefüllt; die Gruppe bekommt die Bestätigung mit dem erkannten Titel.
+**Ablauf für neue Dokumente**
+
+1. Zielgruppe, Dateiendung, Nachrichten-ID, Größe und UTF-8 prüfen.
+2. Metadaten extrahieren und vollständig validieren.
+3. Titel und Zusammenfassung als Voyage-Dokument einbetten und validieren.
+4. Rohdaten, Identität, Metadaten und Embedding gemeinsam per Upsert speichern.
+5. Erst danach mit dem bereinigten Titel in WhatsApp bestätigen.
+
+Bei einem Anthropic-, Voyage- oder Supabase-Fehler wird keine unvollständige
+Phase-3-Zeile geschrieben und keine Bestätigung gesendet.
+
+**Replay und Phase-2-Anreicherung**
+
+- Der Lookup über `wa_message_id` erfolgt vor Medien-Download und
+  Provider-Aufrufen.
+- Eine vollständige Phase-3-Zeile wird ohne Download, Provider-Aufruf, Write
+  oder erneute Bestätigung übersprungen.
+- Eine unvollständige Phase-2-Zeile wird still aus ihrem gespeicherten `raw_md`
+  angereichert; das Medium wird nicht erneut heruntergeladen.
+- Beim Enrichment werden ausschließlich `wa_message_id`, `titel`, `summary`,
+  `tags`, `kategorie` und `embedding` geschrieben. Rohtext, Autor, Status,
+  Claim und Zeitstempel werden nicht überschrieben.
+- Fehlt wiederverwendbares `raw_md`, endet der Vorgang vor kostenpflichtigen
+  Aufrufen.
+
+**Lokale Verifikation**
+
+`npm test` besteht mit 80/80 netzfreien Tests. Abgedeckt sind der genaue
+Anthropic-/Voyage-Vertrag, Schema- und Dimensionsvalidierung, Timeout/Retry,
+Refusal- und Fehlerpfade, vollständige neue Ingestion, kostenfreie Replays,
+stille Phase-2-Anreicherung, DB-Allowlist und fehlende Teilpersistenz.
+
+**Noch offene Live-Abnahme**
+
+1. `sql/schema.sql` in einem echten Supabase-Projekt anwenden.
+2. Alle fünf Env-Variablen mit realen, serverseitigen Zugangsdaten setzen.
+3. Den Bot mit einer Zweitnummer starten und eine gültige `.md` bis 1 MiB in
+   der Zielgruppe posten.
+4. In Supabase prüfen, dass Rohtext, vier Metadatenfelder und exakt 1024
+   Embedding-Werte gespeichert sind.
+5. Prüfen, dass die WhatsApp-Bestätigung erst nach der Persistenz den erkannten
+   Titel nennt.
+6. Dieselbe Nachricht erneut zustellen und verifizieren, dass weder
+   Provider-Aufrufe noch Write oder Bestätigung wiederholt werden.
+7. Eine vorhandene Phase-2-Zeile erneut zustellen und die stille Anreicherung
+   aus `raw_md` prüfen.
+
+Anthropic, Voyage, WhatsApp und Supabase wurden in der lokalen Validierung nicht
+live aufgerufen. Diese Abnahme ist vor einem produktiven Einsatz zwingend.
 
 ---
 
-### Phase 4 — `/suche` (erster Command)
+### Phase 4 — `/suche` (geplant)
 
-Command-Routing in `messages.upsert`: Textnachrichten, die mit `/` beginnen, gehen an
-`commands.js` statt in den Ingest.
+Command-Routing in `messages.upsert`: Textnachrichten, die mit `/` beginnen,
+gehen an `commands.js` statt in den Ingest.
 
-- `/suche <text>` → `embed(text)` → RPC `suche_projekte` → Top 5 formatiert zurück.
+- `/suche <text>` → `embed(text, { inputType: 'query' })` mit `voyage-4` →
+  RPC `suche_projekte` → Top 5 formatiert zurück.
 
 ```js
 export async function handleSuche(sock, jid, query) {
-  const emb = await embed(query);
+  const emb = await embed(query, { inputType: 'query' });
   const { data, error } = await supabase.rpc('suche_projekte', {
-    query_embedding: emb,      // ⚠️ evtl. JSON.stringify(emb) — siehe Fallstricke
+    query_embedding: emb,
     query_text: query,
     treffer: 5,
   });
@@ -290,25 +327,26 @@ export async function handleSuche(sock, jid, query) {
 }
 ```
 
-**Akzeptanzkriterium:** `/suche puzzle game` liefert thematisch passende Projekte, auch
-wenn das Wort „puzzle" im Post nicht wörtlich vorkommt (semantischer Treffer).
+**Akzeptanzkriterium:** `/suche puzzle game` liefert thematisch passende
+Projekte, auch wenn das Wort „puzzle“ im Post nicht wörtlich vorkommt.
 
 ---
 
-### Phase 5 — `/nehmen` & `/liste` (Kür)
+### Phase 5 — `/nehmen` & `/liste` (geplant)
 
-- `/nehmen <id>` → `update projekte set status='vergeben', claimed_by=<pushName> where id=<id>`
-  → bestätigen. Löst „nicht doppelt am gleichen Projekt arbeiten".
-- `/liste frei` → `select id, titel from projekte where status='frei'`.
+- `/nehmen <id>` setzt `status='vergeben'` und `claimed_by=<pushName>` und
+  bestätigt die Änderung.
+- `/liste frei` liefert freie Projekte.
 
-**Akzeptanzkriterium:** Nach `/nehmen 42` taucht #42 nicht mehr in `/liste frei` auf und
-ist in der Suche als `[vergeben]` markiert.
+**Akzeptanzkriterium:** Nach `/nehmen 42` taucht #42 nicht mehr in
+`/liste frei` auf und ist in der Suche als `[vergeben]` markiert.
 
 ---
 
 ## 7. Deployment (VPS, systemd)
 
 `/etc/systemd/system/wa-projekt-bot.service`:
+
 ```ini
 [Unit]
 Description=WA Projekt Bot
@@ -325,37 +363,55 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-Erstes QR-Login **interaktiv** machen (`node src/index.js` von Hand), erst danach als
-Service aktivieren — sonst siehst du den QR nicht. `auth/` bleibt persistent, danach
-reconnected der Bot selbst.
+Das erste QR-Login interaktiv mit `node src/index.js` durchführen. Erst danach
+den Service aktivieren; sonst ist der QR-Code nicht sichtbar. `auth/` muss
+zwischen Neustarts persistent bleiben.
 
 ---
 
-## 8. Fallstricke (unbedingt beachten)
+## 8. Fallstricke
 
-- **`auth/` und `.env` niemals committen** — `auth/` enthält die Session, mit der man den
-  Account übernehmen kann. In `.gitignore` zuerst eintragen.
-- **pgvector via supabase-js RPC:** Postgres erwartet das Embedding als `'[0.1,0.2,…]'`.
-  Falls der RPC-Call mit dem Array fehlschlägt, `JSON.stringify(emb)` übergeben.
-- **JSON-Parsing der LLM-Antwort:** Modelle packen manchmal doch ```-Fences drumrum.
-  Vor `JSON.parse` Fences strippen und einen Retry mit strengerem Prompt einbauen, statt
-  hart zu crashen.
-- **Idempotenz:** `onConflict: 'wa_message_id'` im Bot und der Unique-Constraint auf
-  `wa_message_id` im Schema gehören zusammen — beides nicht weglassen.
-- **Supabase-Zugang:** Nur eine HTTPS-URL akzeptieren. Den `service_role`-Key ausschließlich
-  im serverseitigen Bot verwenden; RLS und Rechte aus `sql/schema.sql` nicht lockern.
-- **Dateigrenzen:** Nur `.md` aus der exakten Zielgruppe verarbeiten. Das 1-MiB-Limit vor
-  und nach dem Download prüfen und nur gültiges UTF-8 ohne NUL-Bytes speichern.
-- **Rate/Kosten:** Fable-Call nur bei tatsächlicher `.md` auslösen, nie bei jeder Nachricht.
-- **Gruppen-Scope:** ausschließlich `TARGET_GROUP_JID` verarbeiten, sonst reagiert der Bot
-  in jedem Chat, in dem die Nummer steckt.
-- **Voyage-Dimension:** `voyage-3` = 1024. Wenn du das Embedding-Modell wechselst, muss
-  `vector(N)` im Schema mitgezogen werden, sonst passt nichts mehr zusammen.
+- **`auth/` und `.env` niemals committen.** `auth/` enthält die WhatsApp-Session,
+  `.env` enthält Supabase- und Provider-Secrets.
+- **Externe Verarbeitung:** Roh-Markdown geht bis zur 12.000-Zeichen-Grenze an
+  Anthropic; Titel und Summary gehen an Voyage. Für Fable gilt eine
+  30-tägige Aufbewahrung. Keine Secrets oder ungeklärten sensiblen Inhalte
+  einspeisen.
+- **Structured Outputs:** Provider-Antworten werden nicht repariert oder mit
+  einem manuellen Fallback übernommen. Refusal, falscher Stop-Grund, ungültiges
+  JSON oder ein abweichendes Schema brechen die Verarbeitung ab.
+- **Idempotenz:** `onConflict: 'wa_message_id'` und der Unique-Constraint gehören
+  zusammen. Sie verhindern doppelte Zeilen, aber keine doppelten Kosten bei
+  zeitgleichen Zustellungen.
+- **Nebenläufigkeit:** Der Lookup und Upsert sind kein atomarer Claim. Parallele
+  Zustellungen derselben neuen Nachrichten-ID können doppelte Provider-Aufrufe
+  und Bestätigungen verursachen. Für höhere Last ist DB-Claiming oder ein
+  keyed Lock erforderlich.
+- **Rate und Kosten:** Jedes Mitglied der Zielgruppe kann mit einer neuen `.md`
+  kostenpflichtige Aufrufe auslösen. Rate Limits, Quoten und Kosten überwachen;
+  für breiteren Betrieb eine Sender-Allowlist oder Rate-Limits ergänzen.
+- **Supabase-Zugang:** Nur HTTPS akzeptieren. Den `service_role`-Key nur im
+  serverseitigen Bot verwenden; RLS und Rechte aus `sql/schema.sql` nicht
+  lockern.
+- **Dateigrenzen:** Nur `.md` aus der exakten Zielgruppe verarbeiten. Das
+  1-MiB-Limit vor und nach dem Download prüfen und nur gültiges UTF-8 ohne
+  NUL-Bytes speichern.
+- **Voyage-Raum:** Dokumente und Queries müssen beide `voyage-4` mit 1024
+  Float-Dimensionen verwenden; nur `input_type` wechselt zwischen `document`
+  und `query`.
+- **pgvector via supabase-js RPC:** Falls der Phase-4-RPC das Zahlenarray nicht
+  akzeptiert, die von Supabase erwartete Vektordarstellung gegen die reale
+  Instanz prüfen. Diese Live-Integration ist noch nicht validiert.
 
 ---
 
 ## 9. Definition of Done
 
-Ein Community-Mitglied postet eine `.md` → Bot bestätigt mit Titel → ein anderes Mitglied
-findet das Projekt über `/suche` (auch bei anderer Wortwahl) → `/nehmen` markiert es als
-vergeben → es verschwindet aus `/liste frei`. Alles innerhalb WhatsApp, ohne App-Wechsel.
+Der Gesamtumfang ist nach Phase 5 erreicht: Ein Community-Mitglied postet eine
+`.md`, der Bot bestätigt nach vollständiger Speicherung mit dem Titel, ein
+anderes Mitglied findet das Projekt über `/suche`, `/nehmen` markiert es als
+vergeben und es verschwindet aus `/liste frei`. Alles bleibt innerhalb
+WhatsApp.
+
+Aktuell ist Phase 3 lokal abgeschlossen. Die produktive Freigabe bleibt bis zur
+oben beschriebenen Live-Abnahme offen.

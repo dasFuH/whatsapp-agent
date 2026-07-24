@@ -7,6 +7,35 @@ Versionierung nach [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-24
+
+### Hinzugefügt
+
+- Phase-3-Metadatenextraktion mit dem festen Modell `claude-fable-5`, GA Structured
+  Outputs, `effort: low`, 12.000-Zeichen-Grenze und strikter lokaler Validierung
+- Dokument-Embeddings mit `voyage-4`, `input_type: document` und exakt 1024
+  Float-Dimensionen; Query-Unterstützung für denselben Vektorraum als Grundlage für
+  Phase 4
+- Kostenfreier Replay-Pfad für vollständige Phase-3-Zeilen sowie stille Anreicherung
+  unvollständiger Phase-2-Zeilen aus gespeichertem `raw_md`
+- `ANTHROPIC_API_KEY` und `VOYAGE_API_KEY` als zentrale Pflichtkonfiguration ab Phase 3
+- Netzfreie Phase-3-Tests für Provider-Verträge, Fehlerpfade, Timeout/Retry,
+  Replay/Enrichment, Feld-Allowlist und fehlende Teilpersistenz; Gesamtsuite 80/80
+
+### Sicherheit
+
+- Anthropic-Antworten schlagen bei Refusal, abweichendem Stop-Grund, ungültigem JSON
+  oder nicht exakt passendem Metadatenschema geschlossen fehl
+- Voyage-Aufrufe auf einen festen HTTPS-Endpunkt, ein festes Modell, Timeout und
+  begrenzte Retries nur für HTTP 429/5xx beschränkt; Keys und Provider-Antwortkörper
+  werden nicht in Fehlermeldungen übernommen
+- Enrichment schreibt nur die explizit erlaubten Phase-3-Felder; Provider-Ergebnisse
+  werden vollständig validiert, bevor ein Upsert oder eine WhatsApp-Bestätigung erfolgt
+- Hinweise zu externer Datenverarbeitung, Fable-Aufbewahrung, sensiblen Inhalten,
+  Rate/Quota-Monitoring und nicht-atomaren gleichzeitigen Replays dokumentiert
+
+## [0.2.0] - 2026-07-24
+
 ### Hinzugefügt
 
 - Phase-2-Ingest für `.md`-Dokumente aus der konfigurierten Zielgruppe: Download,
@@ -40,5 +69,7 @@ Versionierung nach [Semantic Versioning](https://semver.org/lang/de/).
   Dateiname
 - SETUP.md mit vollständiger Spezifikation (Phasen 1–5, DB-Schema, Deployment)
 
-[Unreleased]: https://github.com/dasFuH/whatsapp-agent/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/dasFuH/whatsapp-agent/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/dasFuH/whatsapp-agent/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/dasFuH/whatsapp-agent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dasFuH/whatsapp-agent/releases/tag/v0.1.0
